@@ -1,16 +1,6 @@
 from subprocess import Popen, PIPE, STDOUT
 import sys
 
-def execute(command, directory='.', verbose=False):
-	p = Popen(command, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=directory, close_fds=True)
-	for c in iter(lambda: p.stdout.read(1), ''):
-		if verbose:
-			sys.stdout.write(c)
-	rc = p.poll()
-	if(rc and rc!=0):
-		sys.exit(rc)
-
-
 pomXml = """
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -24,6 +14,15 @@ pomXml = """
 	<properties>
 		<tycho.version>1.0.0</tycho.version>
 	</properties>
+
+	<repositories>
+		<repository>
+			<id>oxygen</id>
+			<url>http://download.eclipse.org/releases/oxygen</url>
+			<layout>p2</layout>
+		</repository>
+
+	</repositories>
 
 	<build>
 		<plugins>
@@ -41,19 +40,13 @@ pomXml = """
 						<configuration>
 							<source>
 								<repository>
-									<url>%(url)s</url>
+									<url>%(siteUrl)s</url>
 									<layout>p2</layout>
 								</repository>
 							</source>
 							<destination>${project.build.directory}/mirror/</destination>
-
 							<ius>
-								<iu>
-									<id>net.sourceforge.pmd.eclipse.feature.group</id>
-									<version>4.0.8.v20151204-2156</version>
-								</iu>
-							</ius>
-
+%(iuConfiguration)s							</ius>
 						</configuration>
 					</execution>
 				</executions>
@@ -96,22 +89,128 @@ assemblyXml="""<assembly xmlns="http://maven.apache.org/plugins/maven-assembly-p
   </fileSets>
 </assembly>"""
 
+iusXml = """								<iu>
+									<id>%(iu)s</id>
+									<version>%(version)s</version>
+								</iu>
+"""
+
+
+def execute(command, directory='.', verbose=False):
+	p = Popen(command, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=directory, close_fds=True)
+	for c in iter(lambda: p.stdout.read(1), ''):
+		if verbose:
+			sys.stdout.write(c)
+	rc = p.poll()
+	if(rc and rc!=0):
+		sys.exit(rc)
+
+
+def prompt(msg, allowEmpty=False):
+	text = raw_input(msg)
+	if(not allowEmpty):
+		while(not text.strip()):
+			text = raw_input(msg)
+	return text.strip()
+
+
+print """
+
+This mirroring tool helps you generating a zipped update site from a given site URL.
+It dynamically creates a Maven project and uses a tycho plugin to mirror the update site.
+
+You have to provide some params."""
+
+print """
+
+Site Name:
+==========
+
+The site name is used as the name for the zip file that contains the mirrored update site.
+
+Example: "pmd"
+"""
+
+siteName = prompt("site name: ")
+
+print """
+
+update site URL:
+================
+
+The URL of the update site. You usually obtain it from the plugin's website.
+
+Example: "https://dl.bintray.com/pmd/pmd-eclipse-plugin/updates/"
+"""
+
+siteUrl = prompt("update site URL: ")
+
+print """
+
+IUs (installable units):
+========================
+
+An update site can consist of multiple installable units (usually Eclipse features).
+You can provide 0..n IU names. If you provide none, all available IUs will be mirrored,
+otherwise the given subset.
+
+Example: "net.sourceforge.pmd.eclipse.feature.group"
+"""
+
+
+ius = []
+iu = prompt("IU # 1 (blank for all IUs): ", allowEmpty=True)
+while(iu.strip()):
+	ius.append(iu)
+	iu = prompt("IU # %d (blank to end list): " % (len(ius)+1), allowEmpty=True)
+
+versions = {}
+
+for iu in ius:
+	version = prompt("Version for IU '%s' (blank for latest): " % iu, allowEmpty=True)
+	versions[iu]=version
+
+print """
+
+
+The script will now generate a Maven project in the subfolder mirror-eclipse-site
+and execute it to mirror and assemble the site.
+
+
+"""
+
+raw_input("ENTER")
+
+iuConfiguration = ""
+
+for iu in ius:
+	iuConfiguration += (iusXml % {'iu':iu, 'version': versions[iu]})
+
 execute("rm -rf mirror-eclipse-site/")
 
 execute("mkdir mirror-eclipse-site")
 
-data = {'name':'pmd', 'url':'https://dl.bintray.com/pmd/pmd-eclipse-plugin/updates/'}
+data = {'siteName':siteName, 'siteUrl':siteUrl, 'iuConfiguration':iuConfiguration}
 
 with open("mirror-eclipse-site/pom.xml", "w") as pomFile:
-	pomFile.write(pomXml%data)
+	pomFile.write(pomXml % data)
 	
 with open("mirror-eclipse-site/assembly.xml", "w") as pomFile:
 	pomFile.write(assemblyXml)
-	
+
 execute("cd mirror-eclipse-site")
 
 execute("mvn package", "mirror-eclipse-site", verbose=True)
 
-execute("cp mirror-eclipse-site/target/mirror-eclipse-site-1.0-mirror.zip %(name)s.zip"%data)
+execute("cp mirror-eclipse-site/target/mirror-eclipse-site-1.0-mirror.zip %s.zip" % siteName)
 
 execute("rm -rf mirror-eclipse-site/")
+
+print """
+
+
+If the Maven project was completed successfully, you find the update site in %s.zip.
+
+
+""" % siteName
+
